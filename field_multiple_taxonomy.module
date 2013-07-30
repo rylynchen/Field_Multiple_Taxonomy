@@ -1,0 +1,461 @@
+<?php
+
+/**
+ * Implements hook_menu().
+ */
+function field_multiple_taxonomy_menu() {
+  $items = array();
+  $items['field_multiple_taxonomy/autocomplete'] = array(
+    'title' => 'Autocomplete taxonomy',
+    'page callback' => 'field_multiple_taxonomy_autocomplete',
+    'access arguments' => array('access content'),
+    'type' => MENU_CALLBACK,
+  );
+  return $items;
+}
+
+/**
+ * Implements hook_permission().
+ */
+function field_multiple_taxonomy_permission() {
+  return array(
+    'administer field multiple taxonomy' => array(
+      'title' => t('administer Field Multiple Taxonomy'),
+      'description' => t('Access to administer field multiple taxonomy.'),
+    ),
+  );
+}
+
+/**
+ * Field multiple taxonomy limit symbol.
+ */
+function field_multiple_taxonomy_limit_symbol() {
+  $settings = field_multiple_taxonomy_settings();
+  $limit = array($settings->dup_left_symbol, $settings->dup_right_symbol, $settings->new_left_symbol, $settings->new_right_symbol);
+  return array_unique($limit);
+}
+
+/**
+ * Implements hook_field_info().
+ */
+function field_multiple_taxonomy_field_info() {
+  return array(
+    'field_multiple_taxonomy_term_reference' => array(
+      'label' => t('Multiple Taxonomy Term Reference'),
+      'description' => t('This field stores a reference to multiple taxonomy term.'),
+      'default_widget' => 'field_multiple_taxonomy_autocomplete',
+      'default_formatter' => 'field_multiple_taxonomy_link',
+      'settings' => array(
+        'allowed_values' => array(
+          array(
+            'vocabulary' => '',
+            'parent' => '0',
+          ),
+        ),
+        'allowed_new' => 0,
+        'allowed_new_roles' => array(),
+      ),
+    ),
+  );
+}
+
+/**
+ * Implements hook_field_validate().
+ */ 
+function field_multiple_taxonomy_field_validate($entity_type, $entity, $field, $instance, $langcode, $items, &$errors) {
+  $tids = array();
+  foreach ($items as $delta => $item) {
+    if (!empty($item['tid']) && $item['tid'] != 'autocreate') {
+      $tids[] = $item['tid'];
+    }
+  }
+  if (!empty($items)) {
+    $terms = taxonomy_term_load_multiple($tids);
+    foreach ($items as $delta => $item) {
+      $validate = TRUE;
+      if (!empty($item['tid']) && $item['tid'] != 'autocreate') {
+        $validate = FALSE;
+        foreach ($field['settings']['allowed_values'] as $settings) {
+          if (isset($settings['vocabulary'])) {
+            if (in_array($terms[$item['tid']]->vocabulary_machine_name, $settings['vocabulary'])) {
+              $validate = TRUE;
+              break;
+            }
+          }
+        }
+
+      }
+      else {
+        $validate = (boolean)$field['settings']['allowed_new'];
+      }
+      if (!$validate) {
+        $errors[$field['field_name']][$langcode][$delta][] = array(
+          'error' => 'taxonomy_term_reference_illegal_value',
+          'message' => t('%name illegal value : %value.', array('%name' => $instance['label'], '%value' => $item['name'])),
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_field_is_empty().
+ */
+function field_multiple_taxonomy_field_is_empty($item, $field) {
+  if (!is_array($item) || (isset($item['tid']) && empty($item['tid']) && (string) $item['tid'] !== '0')) {
+    return TRUE;
+  }
+  return FALSE;
+}
+
+/**
+ * Implements hook_field_formatter_info().
+ */
+function field_multiple_taxonomy_field_formatter_info() {
+  return array(
+    'field_multiple_taxonomy_link' => array(
+      'label' => t('Field multiple taxonomy link'),
+      'field types' => array('field_multiple_taxonomy_term_reference'),
+    ),
+  );
+}
+
+/**
+ * Implements hook_field_formatter_view().
+ */
+function field_multiple_taxonomy_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
+  $element = array();
+  switch ($display['type']) {
+    case 'field_multiple_taxonomy_link':
+      foreach ($items as $delta => $item) {
+        if ($item['tid'] == 'autocreate') {
+          $element[$delta] = array(
+            '#markup' => check_plain($item['name']),
+          );
+        }
+        else {
+          $term = $item['taxonomy_term'];
+          $uri = entity_uri('taxonomy_term', $term);
+          $element[$delta] = array(
+            '#type' => 'link',
+            '#title' => $term->name,
+            '#href' => $uri['path'],
+            '#options' => $uri['options'],
+          );
+        }
+      }
+      break;
+  }
+  return $element;
+}
+
+/**
+ * Implements hook_field_widget_info().
+ */
+function field_multiple_taxonomy_field_widget_info() {
+  return array(
+    'field_multiple_taxonomy_autocomplete' => array(
+      'label' => t('Auto complete'),
+      'field types' => array('field_multiple_taxonomy_term_reference'),
+      'settings' => array(
+        'size' => 60,
+        'autocomplete_path' => 'field_multiple_taxonomy/autocomplete',
+      ),
+      'behaviors' => array(
+        'multiple values' => FIELD_BEHAVIOR_CUSTOM,
+      ),
+    ),
+  );
+}
+
+/**
+ * Implements hook_field_widget_form().
+ */
+function field_multiple_taxonomy_field_widget_form(&$form, &$form_state, $field, $instance, $langcode, $items, $delta, $element) {
+  $tags = array();
+  foreach ($items as $item) {
+    $tags[$item['tid']] = isset($item['taxonomy_term']) ? $item['taxonomy_term'] : taxonomy_term_load($item['tid']);
+  }
+  $element += array(
+    '#type' => 'textfield',
+    '#default_value' => taxonomy_implode_tags($tags),
+    '#autocomplete_path' => $instance['widget']['settings']['autocomplete_path'] . '/' . $field['field_name'],
+    '#size' => $instance['widget']['settings']['size'],
+    '#maxlength' => 1024,
+    '#element_validate' => array('field_multiple_taxonomy_autocomplete_validate'),
+    '#attributes' => array('class' => array('multiple_taxonomy_field')),
+  );
+  $form['#attached']['js'][] = array(
+    'data' => drupal_get_path('module', 'field_multiple_taxonomy').'/field_multiple_taxonomy.js', 
+    'scope' => 'footer', 
+    'weight' => 21,
+  );
+  return $element;
+}
+
+/**
+ * Form element validate handler for taxonomy term autocomplete element.
+ */
+function field_multiple_taxonomy_autocomplete_validate($element, &$form_state) {
+  $value = array();
+  if ($tags = $element['#value']) {
+    $field = field_widget_field($element, $form_state);
+    $vocabularies = array();
+    $new_pattern = "/^(?P<name>.*)\<(?P<vocabulary_name>.*)\>$/";
+    $dup_pattern = "/^(?P<name>.*)\[(?P<vocabulary_name>.*)\]$/";
+    foreach ($field['settings']['allowed_values'] as $tree) {
+      foreach ($tree['vocabulary'] as $v) {
+        if ($vocabulary = taxonomy_vocabulary_machine_name_load($v)) {
+          $vocabularies[$vocabulary->vid] = $vocabulary;
+        }
+      }
+    }
+    $typed_terms = drupal_explode_tags($tags);
+    foreach ($typed_terms as $_typed_term) {
+      $typed_term = trim($_typed_term);
+      if (preg_match($dup_pattern, $_typed_term, $matches) || preg_match($new_pattern, $_typed_term, $matches)) {
+        $typed_term = $matches['name'];
+        $vocabulary_name = $matches['vocabulary_name'];
+        $vid = db_select('taxonomy_vocabulary', 'tv')
+              ->condition('tv.name', $vocabulary_name)
+              ->fields('tv', array('vid'))
+              ->execute()->fetchField();
+        $vid = intval($vid);
+        $vids = array($vid);
+      }
+      else {
+        $vid = 0;
+        $vids = array_keys($vocabularies);
+      }
+      
+      if ($possibilities = taxonomy_term_load_multiple(array(), array('name' => trim($typed_term), 'vid' => $vids))) {
+        $term = array_pop($possibilities);
+        $value[] = (array)$term;
+      }
+      elseif (isset($vid) && (int)$vid > 0 && field_multiple_taxonomy_access('new', $field)) {
+        $vocabulary = taxonomy_vocabulary_load($vid);
+        $term = array(
+          'tid' => 'autocreate',
+          'vid' => $vocabulary->vid,
+          'name' => $typed_term,
+          'vocabulary_machine_name' => $vocabulary->machine_name,
+        );
+        $value[] = (array)$term;
+      }
+      else {
+        form_set_error($element['#field_name'], t('%field : 非法字符 %typed_term', array('%field' => $element['#title'], '%typed_term' => $_typed_term)));
+      }
+    }
+  }
+  form_set_value($element, $value, $form_state);
+}
+
+/**
+ * Implements hook_field_presave().
+ *
+ * Create any new terms defined in a freetagging vocabulary.
+ */
+function field_multiple_taxonomy_field_presave($entity_type, $entity, $field, $instance, $langcode, &$items) {
+  if ($field['type'] == 'field_multiple_taxonomy_term_reference') {
+    foreach ($items as $delta => $item) {
+      if ($item['tid'] == 'autocreate') {
+        $term = (object) $item;
+        unset($term->tid);
+        taxonomy_term_save($term);
+        $items[$delta]['tid'] = $term->tid;
+      }
+    }
+  }
+}
+
+/**
+ * Implements hook_field_widget_error().
+ */
+function field_multiple_taxonomy_field_widget_error($element, $error, $form, &$form_state) {
+  form_error($element, $error['message']);
+}
+
+/**
+ * Implements hook_field_settings_form().
+ */
+function field_multiple_taxonomy_field_settings_form($field, $instance, $has_data) {
+  $vocabularies = taxonomy_get_vocabularies();
+  $options = array();
+  foreach ($vocabularies as $vocabulary) {
+    $options[$vocabulary->machine_name] = $vocabulary->name;
+  }
+  $form['allowed_values'] = array(
+    '#tree' => TRUE,
+  );
+
+  foreach ($field['settings']['allowed_values'] as $delta => $tree) {
+    $form['allowed_values'][$delta]['vocabulary'] = array(
+      '#type' => 'checkboxes',
+      '#title' => t('Vocabulary'),
+      '#options' => $options,
+      '#default_value' => empty($tree['vocabulary']) ? array() : is_array($tree['vocabulary']) ? $tree['vocabulary'] : array($tree['vocabulary']),
+      '#required' => TRUE,
+      '#description' => t('The vocabulary which supplies the options for this field.'),
+    );
+    $form['allowed_values'][$delta]['parent'] = array(
+      '#type' => 'value',
+      '#value' => $tree['parent'],
+    );
+  }
+  $form['allowed_new'] = array(
+    '#type' => 'radios',
+    '#title' => t('Allowed add new term'),
+    '#options' => array(0 => t('No'), 1 => t('Yes')),
+    '#default_value' => $field['settings']['allowed_new'],
+  );
+  $roles = user_roles();
+  $form['allowed_new_roles'] = array(
+    '#type' => 'checkboxes',
+    '#title' => t('Who allowed to add new term'),
+    '#options' => $roles,
+    '#default_value' => $field['settings']['allowed_new_roles'],
+    '#states' => array(
+      'visible' => array(':input[name="field[settings][allowed_new]"]' => array('value' => 1)),
+    ),
+  );
+  return $form;
+}
+
+/**
+ * Access control.
+ *
+ * @param $op
+ *
+ * @param $field
+ *
+ * @param $user
+ *
+ * @return boolean
+ */
+function field_multiple_taxonomy_access($op, $field, $user = NULL) {
+  $user = isset($user) ? $user : $GLOBALS['user'];
+  if ($op == 'new') {
+    return count(array_intersect($user->roles, $field['settings']['allowed_new_roles'])) ? TRUE : FALSE;
+  }
+  return FALSE;
+}
+
+/**
+ * Page callback: Outputs JSON for taxonomy autocomplete suggestions.
+ */
+function field_multiple_taxonomy_autocomplete($field_name = '', $tags_typed = '') {
+  $args = func_get_args();
+  array_shift($args);
+  $tags_typed = implode('/', $args);
+
+  if (!($field = field_info_field($field_name)) || $field['type'] !== 'field_multiple_taxonomy_term_reference') {
+    echo t('Taxonomy field @field_name not found.', array('@field_name' => $field_name));
+    exit;
+  }
+
+  $tags_typed = drupal_explode_tags($tags_typed);
+  $tag_last = drupal_strtolower(array_pop($tags_typed));
+  $data = array('vocabularies' => array(), 'matches' => array(), 'prefix' => '');
+  if ($tag_last != '') {
+    $vids = array();
+    $vocabularies = taxonomy_vocabulary_get_names();
+    foreach ($field['settings']['allowed_values'] as $tree) {
+      foreach ($tree['vocabulary'] as $v) {
+        if (isset($vocabularies[$v])) {
+          $vids[] = $vocabularies[$v]->vid;
+          $data['vocabularies'][$vocabularies[$v]->vid]['vid'] = $vocabularies[$v]->vid;
+          $data['vocabularies'][$vocabularies[$v]->vid]['name'] = $vocabularies[$v]->name;
+        }
+      }
+    }
+    $query = db_select('taxonomy_term_data', 't');
+    $query->addTag('translatable');
+    $query->addTag('term_access');
+
+    if (!empty($tags_typed)) {
+      $query->condition('t.name', $tags_typed, 'NOT IN');
+    }
+    $tags_return = $query
+      ->fields('t', array('tid', 'name'))
+      ->condition('t.vid', $vids, 'IN')
+      ->condition('t.name', '%' . db_like($tag_last) . '%', 'LIKE')
+      ->range(0, 10)
+      ->execute()
+      ->fetchAllKeyed();
+    $dup_values = array();
+    if (!empty($tags_return)) {
+      $count_values = array_count_values($tags_return);
+      foreach ($count_values as $key => $val) {
+        if ($val > 1) $dup_values[] = $key;
+      }
+    }
+    $names = array();
+    $prefix = count($tags_typed) ? drupal_implode_tags($tags_typed) . ', ' : '';
+    $data['prefix'] = $prefix;
+    $data['last'] = $tag_last;
+    $data['allowed_new'] = intval(field_multiple_taxonomy_access('new', $field));
+    foreach ($tags_return as $tid => $name) {
+      if (in_array($name, $dup_values)) {
+        $term = taxonomy_term_load($tid);
+        $name .= '['.$data['vocabularies'][$term->vid]['name'].']';
+      }
+      $n = $name;
+      if (strpos($name, ',') !== FALSE || strpos($name, '"') !== FALSE) {
+        $n = '"' . str_replace('"', '""', $name) . '"';
+      }
+
+      $data['matches'][$prefix . $n] = check_plain($name);
+    }
+  }
+  drupal_json_output($data);
+}
+
+/**
+ * Implements hook_field_formatter_prepare_view().
+ *
+ * This preloads all taxonomy terms for multiple loaded objects at once and
+ * unsets values for invalid terms that do not exist.
+ */
+function field_multiple_taxonomy_field_formatter_prepare_view($entity_type, $entities, $field, $instances, $langcode, &$items, $displays) {
+  $tids = array();
+
+  // Collect every possible term attached to any of the fieldable entities.
+  foreach ($entities as $id => $entity) {
+    foreach ($items[$id] as $delta => $item) {
+      // Force the array key to prevent duplicates.
+      if ($item['tid'] != 'autocreate') {
+        $tids[$item['tid']] = $item['tid'];
+      }
+    }
+  }
+  if ($tids) {
+    $terms = taxonomy_term_load_multiple($tids);
+
+    // Iterate through the fieldable entities again to attach the loaded term data.
+    foreach ($entities as $id => $entity) {
+      $rekey = FALSE;
+
+      foreach ($items[$id] as $delta => $item) {
+        // Check whether the taxonomy term field instance value could be loaded.
+        if (isset($terms[$item['tid']])) {
+          // Replace the instance value with the term data.
+          $items[$id][$delta]['taxonomy_term'] = $terms[$item['tid']];
+        }
+        // Terms to be created are not in $terms, but are still legitimate.
+        elseif ($item['tid'] == 'autocreate') {
+          // Leave the item in place.
+        }
+        // Otherwise, unset the instance value, since the term does not exist.
+        else {
+          unset($items[$id][$delta]);
+          $rekey = TRUE;
+        }
+      }
+
+      if ($rekey) {
+        // Rekey the items array.
+        $items[$id] = array_values($items[$id]);
+      }
+    }
+  }
+}

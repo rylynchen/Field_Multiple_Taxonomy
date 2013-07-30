@@ -1,0 +1,6 @@
+name = Field Multiple Taxonomy
+description = Provide a field type can reference multiple taxonomy.
+package = Other
+core = 7.x
+dependencies[] = field
+dependencies[] = taxonomy
